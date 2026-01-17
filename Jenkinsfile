@@ -72,7 +72,7 @@ pipeline {
     steps {
         withMaven(
             maven: 'maven3',
-            jdk: 'jdk11',
+            jdk: 'jdk17',
             mavenSettingsConfig: '22894c1a-0918-4cf0-80e2-cc90761c7255',
             traceability: true
         ) {
