@@ -70,16 +70,24 @@ pipeline {
         
         stage('Publish artifact To Nexus') {
     steps {
-        withMaven(
-            maven: 'maven3',
-            jdk: 'jdk17',
-            mavenSettingsConfig: '22894c1a-0918-4cf0-80e2-cc90761c7255',
-            traceability: true
-        ) {
-            sh 'mvn clean deploy -DskipTests=true'
+        withCredentials([
+            usernamePassword(
+                credentialsId: 'nexus-creds',
+                usernameVariable: 'NEXUS_USER',
+                passwordVariable: 'NEXUS_PASSWORD'
+            )
+        ]) {
+            withMaven(
+                maven: 'maven3',
+                mavenSettingsConfig: '22894c1a-0918-4cf0-80e2-cc90761c7255',
+                traceability: true
+            ) {
+                sh 'mvn clean deploy -DskipTests'
+            }
         }
     }
 }
+
 
         
         stage('Docker Build & tag image') {
