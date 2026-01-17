@@ -12,7 +12,7 @@ pipeline {
     }
     
     environment {
-        IMAGE_NAME = "yogesh2024/bankapp"
+        IMAGE_NAME = "chandan669/bankapp"
         TAG = "${params.DOCKER_TAG}"
         KUBE_NAMESPACE = 'webapps'
         SCANNER_HOME = tool 'sonar-scanner'
@@ -21,7 +21,7 @@ pipeline {
     stages {
         stage('Git Checkout') {
             steps {
-                git branch: 'main', credentialsId: 'github-token', url: 'https://github.com/iam-yogeshreddy/Blue-Green-Deployment.git'
+                git branch: 'main', credentialsId: 'github-token', url: 'https://github.com/Chandanb2003/Blue-Green-Deployment.git'
             }
         }
         
