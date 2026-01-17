@@ -69,12 +69,18 @@ pipeline {
         }
         
         stage('Publish artifact To Nexus') {
-            steps {
-                withMaven(globalMavenSettingsConfig: 'maven-settings', jdk: '', maven: 'maven3', mavenSettingsConfig: '', traceability: true) {
-                    sh "mvn deploy -X -DskipTests=true"
-                }
-            }
+    steps {
+        withMaven(
+            maven: 'maven3',
+            jdk: 'jdk11',
+            mavenSettingsConfig: '22894c1a-0918-4cf0-80e2-cc90761c7255',
+            traceability: true
+        ) {
+            sh 'mvn clean deploy -DskipTests=true'
         }
+    }
+}
+
         
         stage('Docker Build & tag image') {
             steps {
