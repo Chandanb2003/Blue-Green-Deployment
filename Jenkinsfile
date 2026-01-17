@@ -6,20 +6,16 @@ pipeline {
     }
 
     parameters {
-        choice(name: 'DEPLOY_ENV', choices: ['blue', 'green'], description: 'Choose which environment to deploy')
-        choice(name: 'DOCKER_TAG', choices: ['blue', 'green'], description: 'Choose Docker image tag')
-        booleanParam(name: 'SWITCH_TRAFFIC', defaultValue: false, description: 'Switch traffic between Blue and Green')
+        choice(name: 'DEPLOY_ENV', choices: ['blue', 'green'], description: 'Deploy environment')
+        choice(name: 'DOCKER_TAG', choices: ['blue', 'green'], description: 'Docker image tag')
+        booleanParam(name: 'SWITCH_TRAFFIC', defaultValue: false, description: 'Switch traffic')
     }
 
     environment {
-        IMAGE_NAME      = "chandan669/bankapp"
-        TAG             = "${params.DOCKER_TAG}"
-        KUBE_NAMESPACE  = "webapps"
-        SCANNER_HOME    = tool 'sonar-scanner'
-
-        PROJECT_ID      = "model-deployments"
-        CLUSTER_NAME    = "cluster-1"
-        CLUSTER_REGION  = "us-central1"
+        IMAGE_NAME = "chandan669/bankapp"
+        TAG = "${params.DOCKER_TAG}"
+        KUBE_NAMESPACE = "webapps"
+        SCANNER_HOME = tool 'sonar-scanner'
     }
 
     stages {
@@ -44,29 +40,29 @@ pipeline {
             }
         }
 
-        stage('Trivy FS scan') {
+        stage('Trivy FS Scan') {
             steps {
                 sh 'trivy fs --format table -o fs.html .'
             }
         }
 
-        stage('Sonarqube analysis') {
+        stage('SonarQube Analysis') {
             steps {
                 withSonarQubeEnv('sonar') {
                     sh '''
-                        $SCANNER_HOME/bin/sonar-scanner \
-                        -Dsonar.projectKey=BlueGreen \
-                        -Dsonar.projectName=BlueGreen \
-                        -Dsonar.java.binaries=target
+                    $SCANNER_HOME/bin/sonar-scanner \
+                    -Dsonar.projectKey=BlueGreen \
+                    -Dsonar.projectName=BlueGreen \
+                    -Dsonar.java.binaries=target
                     '''
                 }
             }
         }
 
-        stage('Quality gate check') {
+        stage('Quality Gate') {
             steps {
                 timeout(time: 1, unit: 'HOURS') {
-                    waitForQualityGate abortPipeline: false
+                    waitForQualityGate abortPipeline: true
                 }
             }
         }
@@ -77,7 +73,7 @@ pipeline {
             }
         }
 
-        stage('Publish artifact To Nexus') {
+        stage('Publish Artifact to Nexus') {
             steps {
                 withCredentials([
                     usernamePassword(
@@ -96,89 +92,90 @@ pipeline {
             }
         }
 
-        stage('Docker Build & Tag Image') {
+        stage('Docker Build') {
             steps {
-                withDockerRegistry(credentialsId: 'docker-cred') {
-                    sh 'docker build -t ${IMAGE_NAME}:${TAG} .'
+                withDockerRegistry(
+                    credentialsId: 'docker-cred',
+                    url: 'https://index.docker.io/v1/'
+                ) {
+                    sh "docker build -t ${IMAGE_NAME}:${TAG} ."
                 }
             }
         }
 
         stage('Trivy Image Scan') {
             steps {
-                sh 'trivy image --format table -o image.html ${IMAGE_NAME}:${TAG}'
+                sh "trivy image ${IMAGE_NAME}:${TAG}"
             }
         }
 
-        stage('Docker Push Image') {
+        stage('Docker Push') {
             steps {
-                withDockerRegistry(credentialsId: 'docker-cred') {
-                    sh 'docker push ${IMAGE_NAME}:${TAG}'
+                withDockerRegistry(
+                    credentialsId: 'docker-cred',
+                    url: 'https://index.docker.io/v1/'
+                ) {
+                    sh "docker push ${IMAGE_NAME}:${TAG}"
                 }
             }
         }
 
-        stage('Authenticate to GKE') {
+        stage('Deploy MySQL') {
             steps {
-                withCredentials([file(credentialsId: 'gcp-sa-key', variable: 'GCP_KEY')]) {
+                withKubeConfig(credentialsId: 'gke-kubeconfig', namespace: "${KUBE_NAMESPACE}") {
+                    sh 'kubectl apply -f mysql-ds.yml'
+                }
+            }
+        }
+
+        stage('Deploy Service') {
+            steps {
+                withKubeConfig(credentialsId: 'gke-kubeconfig', namespace: "${KUBE_NAMESPACE}") {
                     sh '''
-                        gcloud auth activate-service-account --key-file=$GCP_KEY
-                        gcloud config set project $PROJECT_ID
-                        gcloud container clusters get-credentials $CLUSTER_NAME \
-                            --region $CLUSTER_REGION
-                        kubectl get nodes
+                    if ! kubectl get svc bankapp-service; then
+                        kubectl apply -f bankapp-service.yml
+                    fi
                     '''
                 }
             }
         }
 
-        stage('Deploy MySQL Deployment and Service') {
-            steps {
-                sh 'kubectl apply -f mysql-ds.yml -n $KUBE_NAMESPACE'
-            }
-        }
-
-        stage('Deploy SVC app') {
-            steps {
-                sh '''
-                    if ! kubectl get svc bankapp-service -n $KUBE_NAMESPACE; then
-                        kubectl apply -f bankapp-service.yml -n $KUBE_NAMESPACE
-                    fi
-                '''
-            }
-        }
-
-        stage('Deploy to Kubernetes') {
+        stage('Deploy Application') {
             steps {
                 script {
                     def deploymentFile = params.DEPLOY_ENV == 'blue'
                         ? 'app-deployment-blue.yml'
                         : 'app-deployment-green.yml'
 
-                    sh "kubectl apply -f ${deploymentFile} -n $KUBE_NAMESPACE"
+                    withKubeConfig(credentialsId: 'gke-kubeconfig', namespace: "${KUBE_NAMESPACE}") {
+                        sh "kubectl apply -f ${deploymentFile}"
+                    }
                 }
             }
         }
 
-        stage('Switch Traffic Between Blue & Green Environment') {
+        stage('Switch Traffic') {
             when {
                 expression { params.SWITCH_TRAFFIC }
             }
             steps {
-                sh """
+                withKubeConfig(credentialsId: 'gke-kubeconfig', namespace: "${KUBE_NAMESPACE}") {
+                    sh """
                     kubectl patch service bankapp-service \
-                    -p '{"spec":{"selector":{"app":"bankapp","version":"${DEPLOY_ENV}"}}}' \
-                    -n $KUBE_NAMESPACE
-                """
+                    -p '{"spec":{"selector":{"app":"bankapp","version":"${params.DEPLOY_ENV}"}}}'
+                    """
+                }
             }
         }
 
         stage('Verify Deployment') {
             steps {
-                sh '''
-                    kubectl get pods -l version=$DEPLOY_ENV -n $KUBE_NAMESPACE
-                    kubectl get svc bankapp-service -n $KUBE_NAMESPACE
-                '''
+                withKubeConfig(credentialsId: 'gke-kubeconfig', namespace: "${KUBE_NAMESPACE}") {
+                    sh '''
+                    kubectl get pods -o wide
+                    kubectl get svc bankapp-service
+                    '''
+                }
             }
         }
     }
